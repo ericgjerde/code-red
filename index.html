@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>Code Red: Jungle Run</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <canvas id="game" aria-label="Code Red: Jungle Run game canvas"></canvas>
+
+  <button id="cheatToggle" type="button">CHEATS <span>C</span></button>
+
+  <div id="cheatMenu" aria-hidden="true">
+    <div class="cheat-panel">
+      <div class="cheat-header">
+        <div>
+          <h2>Cheat Menu</h2>
+          <p>Click anything below. Toggle this menu with <strong>C</strong>.</p>
+        </div>
+        <button id="cheatClose" type="button">✕</button>
+      </div>
+      <div class="cheat-grid">
+        <button data-cheat="GODMODE">God Mode</button>
+        <button data-cheat="SHIELD">Mega Shield</button>
+        <button data-cheat="DRONES">Laser Drone</button>
+        <button data-cheat="GUNS">All Weapons</button>
+        <button data-cheat="BOOTS">Moon Boots</button>
+        <button data-cheat="HYPER">Hyper Soldier</button>
+        <button data-cheat="SLOWMO">Slow-Mo</button>
+        <button data-cheat="PARTY">Party Mode</button>
+        <button data-cheat="NUKE">Screen Nuke</button>
+        <button data-cheat="RAIN">Powerup Rain</button>
+        <button data-cheat="MONEY">+50k Score</button>
+        <button data-cheat="LIFE">+5 Lives</button>
+      </div>
+      <p class="cheat-note">Weapon switching: press <strong>R</strong>/<strong>E</strong>, or tap the mobile <strong>WEAPON</strong> button after collecting more weapons.</p>
+    </div>
+  </div>
+
+  <div id="touchControls" aria-hidden="true">
+    <div class="touch-left">
+      <button data-input="left">◀</button>
+      <button data-input="right">▶</button>
+      <button data-input="up">▲</button>
+      <button data-input="down">▼</button>
+    </div>
+    <div class="touch-right">
+      <button data-input="jump">JUMP</button>
+      <button data-input="shoot">FIRE</button>
+      <button data-input="secondary">ION</button>
+      <button data-input="switch">WEAPON</button>
+    </div>
+  </div>
+
+  <script src="game.js"></script>
+</body>
+</html>

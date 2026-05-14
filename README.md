@@ -1,0 +1,34 @@
+# Code Red: Jungle Run
+
+A browser-based, retro side-scrolling run-and-gun game inspired by classic arcade shooters.
+
+## Play
+
+Open `index.html` in a browser.
+
+## Controls
+
+- Move / aim: arrow keys
+- Jump: `Space`
+- Fire main weapon: `F`
+- Fire secondary ion blast: `D`
+- Switch main weapon: `R` or `E`
+- Pause: `P` or `Esc`
+- Mute: `M`
+
+Touch controls appear automatically on mobile/tablet.
+
+## Cheats
+
+Press `C` or click the `CHEATS` button to open the cheat menu. It includes god mode, mega shield, laser drones, all weapons, moon boots, hyper mode, slow-mo, party mode, screen nuke, powerup rain, score, and lives.
+
+## Features
+
+- Three campaign levels: Jungle Run, Frozen Ridge, and Alien Hive
+- Parallax battlefields with unique colors, scenery, pits, platforms, enemy layouts, and bosses
+- Running, jumping, crouching, angled aiming, mouse/touch firing
+- Rifle, spread, laser, flame, and rocket main weapons plus rechargeable ion blast
+- Health, lives, shield, score, combos, drone pods, moon boots, overdrive, magnets, nova bombs
+- Ground troops, runners, jumpers, turrets, drones
+- Crates, pits, platforms, particles, screen shake, retro synth SFX
+- End-level boss battle for every stage
