@@ -3,7 +3,7 @@ html, body {
   width: 100%;
   height: 100%;
   overflow: hidden;
-  background: #05070d;
+  background: radial-gradient(circle at 50% 30%, #14223d, #05070d 65%);
   color: #fff;
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   touch-action: none;
@@ -14,7 +14,7 @@ html, body {
   display: block;
   width: 100vw;
   height: 100vh;
-  image-rendering: crisp-edges;
+  image-rendering: auto;
   background: #05070d;
 }
 
@@ -78,6 +78,14 @@ html, body {
   text-transform: uppercase;
 }
 
+.cheat-panel h3 {
+  margin: 14px 0 8px;
+  color: #77f7ff;
+  font-size: 14px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
 .cheat-header p,
 .cheat-note {
   margin: 0;
@@ -102,8 +110,12 @@ html, body {
   margin-bottom: 14px;
 }
 
+.cheat-grid.compact {
+  grid-template-columns: repeat(5, 1fr);
+}
+
 .cheat-grid button {
-  min-height: 54px;
+  min-height: 48px;
   border: 2px solid rgba(255,255,255,.22);
   border-radius: 14px;
   background: rgba(255,255,255,.08);
@@ -182,7 +194,8 @@ button[data-input="secondary"] { grid-area: secondary; }
 button[data-input="switch"] { grid-area: switch; }
 
 @media (max-width: 700px) {
-  .cheat-grid { grid-template-columns: repeat(2, 1fr); }
+  .cheat-grid,
+  .cheat-grid.compact { grid-template-columns: repeat(2, 1fr); }
   .cheat-header h2 { font-size: 24px; }
 }
 

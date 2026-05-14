@@ -25,6 +25,27 @@
     const dy = c.y - y;
     return dx * dx + dy * dy <= c.r * c.r;
   };
+  function roundRect(x, y, w, h, r = 6) {
+    r = Math.min(r, w / 2, h / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+  function fillRoundRect(x, y, w, h, r, fill) {
+    ctx.fillStyle = fill;
+    roundRect(x, y, w, h, r);
+    ctx.fill();
+  }
+  function strokeRoundRect(x, y, w, h, r, stroke, lw = 1) {
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = lw;
+    roundRect(x, y, w, h, r);
+    ctx.stroke();
+  }
 
   let cssW = 1, cssH = 1, dpr = 1, scale = 1, ox = 0, oy = 0;
   function resize() {
@@ -108,8 +129,16 @@
       player.shield = 99;
       flashCheat('MEGA SHIELD');
     } else if (code === 'DRONES') {
-      player.drones = 5;
-      flashCheat('LASER DRONE SWARM');
+      for (let i = 0; i < 8; i++) addDrone();
+      flashCheat('DRONE SQUADRON +' + droneCount());
+    } else if (code.startsWith('DRONE_')) {
+      const d = addDrone(code.replace('DRONE_', '').toLowerCase());
+      flashCheat((d?.name || 'DRONE').toUpperCase() + ' ADDED #' + droneCount());
+    } else if (code.startsWith('GIVE_')) {
+      const map = { GIVE_HEAL: 'heal', GIVE_SHIELD: 'shield', GIVE_OVERDRIVE: 'overdrive', GIVE_BOOTS: 'boots', GIVE_MAGNET: 'magnet', GIVE_NOVA: 'nova', GIVE_SPREAD: 'spread', GIVE_LASER: 'laser', GIVE_FLAME: 'flame', GIVE_ROCKET: 'rocket' };
+      const kind = map[code];
+      if (kind) grantPowerup(kind, player.x + player.w / 2, player.y - 20);
+      flashCheat((powerupInfo(kind).name || kind).toUpperCase() + ' ADDED');
     } else if (code === 'GUNS') {
       weapons.forEach(w => player.unlocked.add(w.id));
       player.weapon = 'rocket';
@@ -314,7 +343,8 @@
     pits: [],
     platforms: [],
     crates: [],
-    decorations: []
+    decorations: [],
+    props: []
   };
 
   let state = 'title';
@@ -340,13 +370,33 @@
     level.bossName = cfg.boss;
     level.theme = cfg.theme;
     level.decorKinds = cfg.decor;
-    level.pits = cfg.pits.map(p => ({ ...p }));
-    level.platforms = cfg.platforms.map(([x, y, w]) => ({ x, y, w, h: 22 }));
+    // Shrink old arcade-death pits and build around them with bridges/catwalks.
+    level.pits = cfg.pits.map(p => {
+      const w = Math.max(70, Math.floor(p.w * 0.58));
+      return { x: p.x + Math.floor((p.w - w) / 2), w };
+    });
+    level.platforms = cfg.platforms.map(([x, y, w]) => ({ x, y, w, h: 22, kind: 'solid' }));
+    for (const p of level.pits) {
+      level.platforms.push({ x: p.x - 54, y: level.ground - rand(92, 142), w: p.w + 108, h: 18, kind: 'bridge' });
+      if (Math.random() < 0.6) level.platforms.push({ x: p.x + p.w + 76, y: level.ground - rand(154, 210), w: rand(120, 190), h: 18, kind: 'catwalk' });
+    }
+    for (let x = 360; x < level.width - 900; x += rand(380, 620)) {
+      level.platforms.push({ x, y: rand(238, 385), w: rand(120, 230), h: 18, kind: Math.random() < 0.45 ? 'catwalk' : 'solid' });
+    }
+    level.platforms.sort((a, b) => a.x - b.x);
     level.crates = cfg.crates.map(x => ({ x, y: level.ground - 42, w: 42, h: 42, hp: 3 + levelIndex }));
+    for (let x = 520; x < level.width - 800; x += rand(520, 780)) {
+      level.crates.push({ x, y: level.ground - 42, w: 42, h: 42, hp: 3 + levelIndex });
+    }
     level.decorations = [];
+    level.props = [];
     for (let x = 80; x < level.width - 300; x += rand(95, 220)) {
       const kind = level.decorKinds[Math.floor(Math.random() * level.decorKinds.length)];
       level.decorations.push({ x, kind, h: rand(45, 120), sway: rand(0, Math.PI * 2) });
+    }
+    for (let x = 280; x < level.width - 700; x += rand(360, 620)) {
+      const kinds = levelIndex === 0 ? ['bunker', 'waterfall', 'antenna', 'ruin'] : levelIndex === 1 ? ['radar', 'tower', 'icefall', 'antenna'] : ['hivepod', 'ribcage', 'vent', 'obelisk'];
+      level.props.push({ x, kind: kinds[Math.floor(Math.random() * kinds.length)], h: rand(75, 170), w: rand(70, 150), y: level.ground, phase: rand(0, Math.PI * 2) });
     }
   }
 
@@ -359,7 +409,7 @@
     const carry = keepProgress && player ? {
       lives: Math.max(1, player.lives), hp: Math.max(player.hp, Math.ceil(player.maxHp * 0.65)), maxHp: player.maxHp,
       energy: player.maxEnergy, maxEnergy: player.maxEnergy, weapon: player.weapon, unlocked: new Set(player.unlocked),
-      drones: player.drones, shield: player.shield, boots: player.boots, overdrive: player.overdrive, magnet: player.magnet
+      drones: Array.isArray(player.drones) ? player.drones.map(d => ({ ...d })) : [], shield: player.shield, boots: player.boots, overdrive: player.overdrive, magnet: player.magnet
     } : null;
     buildLevel();
     player = {
@@ -369,7 +419,7 @@
       lives: carry ? carry.lives : 3, invuln: 2.0, fireTimer: 0, secondaryTimer: 0,
       energy: carry ? carry.energy : 100, maxEnergy: carry ? carry.maxEnergy : 100,
       weapon: carry ? carry.weapon : 'rifle', unlocked: carry ? carry.unlocked : new Set(['rifle']), shield: carry ? carry.shield : 0,
-      drones: carry ? carry.drones : 0, droneTimer: 0, boots: carry ? carry.boots : 0, overdrive: carry ? carry.overdrive : 0, magnet: carry ? carry.magnet : 0,
+      drones: carry ? carry.drones : [], droneTimer: 0, boots: carry ? carry.boots : 0, overdrive: carry ? carry.overdrive : 0, magnet: carry ? carry.magnet : 0,
       jumpBuffer: 0, coyote: 0, doubleJump: false, respawn: 0, dead: false
     };
     enemies = [];
@@ -381,7 +431,7 @@
     const cfg = currentLevel();
     const bx = level.width - 650;
     boss = {
-      x: bx, y: levelIndex === 2 ? 176 : 206, w: 360, h: levelIndex === 2 ? 280 : 250, hp: cfg.bossHp, maxHp: cfg.bossHp,
+      x: bx, y: levelIndex === 2 ? 176 : 206, w: 360, h: levelIndex === 2 ? 280 : 250, hp: Math.floor(cfg.bossHp * (1.25 + levelIndex * 0.18)), maxHp: Math.floor(cfg.bossHp * (1.25 + levelIndex * 0.18)),
       active: false, dead: false, phase: 0, timer: 0, spawnTimer: 2.5,
       guns: [
         { x: bx + 74, y: levelIndex === 2 ? 318 : 320, w: 52, h: 45, hp: 25 + levelIndex * 8, cd: 0.6 },
@@ -415,6 +465,11 @@
     cfg.turrets.forEach(x => add('turret', x));
     cfg.drones.forEach(x => add('drone', x, rand(levelIndex === 2 ? 105 : 145, levelIndex === 2 ? 245 : 270)));
     cfg.jumpers.forEach(x => add('jumper', x));
+    for (let i = 5; i < level.platforms.length; i += 4) {
+      const p = level.platforms[i];
+      if (p.x > 650 && p.x < level.width - 900) add('sniper', p.x + p.w * 0.55, p.y - 42);
+    }
+    for (let x = 1250 + levelIndex * 180; x < level.width - 1200; x += 1150) add('heavy', x);
   }
 
   function makeEnemy(type, x, y) {
@@ -423,6 +478,8 @@
     if (type === 'turret') Object.assign(base, { y: level.ground - 38, w: 42, h: 38, hp: 6, maxHp: 6, score: 180 });
     if (type === 'drone') Object.assign(base, { w: 42, h: 28, hp: 3, maxHp: 3, baseY: y || 190, score: 160 });
     if (type === 'jumper') Object.assign(base, { hp: 5, maxHp: 5, w: 35, h: 48, score: 220 });
+    if (type === 'sniper') Object.assign(base, { y: y || level.ground - 92, w: 30, h: 42, hp: 6, maxHp: 6, score: 300, cd: rand(0.2, 1.0) });
+    if (type === 'heavy') Object.assign(base, { y: level.ground - 58, w: 48, h: 58, hp: 13, maxHp: 13, score: 480, cd: rand(0.8, 1.4) });
     if (levelIndex > 0) {
       base.hp += levelIndex;
       base.maxHp += levelIndex;
@@ -445,7 +502,9 @@
       });
       particles[particles.length - 1].max = particles[particles.length - 1].life;
     }
-    camera.shake = Math.max(camera.shake, 5 * power);
+    // Keep impact feedback readable. Full random screen quake was too harsh,
+    // especially with rockets/lasers; reserve big shake for scripted events.
+    camera.shake = Math.max(camera.shake, Math.min(3.2, 2.2 * power));
   }
 
   function addText(text, x, y, color = '#fff') {
@@ -511,16 +570,44 @@
 
   function powerupInfo(kind) {
     const weapon = weapons.find(w => w.id === kind);
-    if (weapon) return { name: weapon.name, label: weapon.name[0], color: weapon.color };
+    if (weapon) return { name: weapon.name, label: weapon.name, color: weapon.color, icon: 'weapon' };
     return {
-      heal: { name: 'HEAL', label: '+', color: '#78ff7d' },
-      shield: { name: 'SHIELD', label: 'S', color: '#63e7ff' },
-      dronepod: { name: 'LASER DRONE', label: 'D', color: '#77f7ff' },
-      overdrive: { name: 'OVERDRIVE', label: '!', color: '#ff4dff' },
-      boots: { name: 'MOON BOOTS', label: 'B', color: '#b9ff56' },
-      magnet: { name: 'MAGNET', label: 'M', color: '#b16cff' },
-      nova: { name: 'NOVA BOMB', label: 'N', color: '#ff9d2e' }
-    }[kind] || { name: 'POWER', label: '?', color: '#fff' };
+      heal: { name: 'MED KIT', label: 'MED KIT', color: '#78ff7d', icon: 'heal' },
+      shield: { name: 'SHIELD', label: 'SHIELD', color: '#63e7ff', icon: 'shield' },
+      dronepod: { name: 'DRONE POD', label: 'DRONE POD', color: '#77f7ff', icon: 'drone' },
+      overdrive: { name: 'OVERDRIVE', label: 'OVERDRIVE', color: '#ff4dff', icon: 'bolt' },
+      boots: { name: 'MOON BOOTS', label: 'MOON BOOTS', color: '#b9ff56', icon: 'boots' },
+      magnet: { name: 'MAGNET', label: 'MAGNET', color: '#b16cff', icon: 'magnet' },
+      nova: { name: 'NOVA BOMB', label: 'NOVA BOMB', color: '#ff9d2e', icon: 'nova' }
+    }[kind] || { name: 'POWER', label: 'POWER', color: '#fff', icon: 'power' };
+  }
+
+  const DRONE_TYPES = [
+    { type: 'laser', name: 'Laser Drone', color: '#77f7ff' },
+    { type: 'striker', name: 'Striker Drone', color: '#ffcf40' },
+    { type: 'shield', name: 'Shield Drone', color: '#63e7ff' },
+    { type: 'blaster', name: 'Blaster Drone', color: '#ff7cff' },
+    { type: 'repair', name: 'Repair Drone', color: '#78ff7d' }
+  ];
+  function droneCount() {
+    return Array.isArray(player?.drones) ? player.drones.length : 0;
+  }
+  function addDrone(type) {
+    if (!player) return null;
+    if (!Array.isArray(player.drones)) player.drones = [];
+    const info = type ? DRONE_TYPES.find(d => d.type === type) || DRONE_TYPES[0] : DRONE_TYPES[player.drones.length % DRONE_TYPES.length];
+    const d = { type: info.type, name: info.name, color: info.color, cd: rand(0, 0.5), phase: rand(0, Math.PI * 2), dash: 0 };
+    player.drones.push(d);
+    return d;
+  }
+  function dronePos(i, total, d) {
+    const ring = Math.floor(i / 8);
+    const a = runTime * (d.type === 'striker' ? 3.4 : 2.2) + i * Math.PI * 2 / Math.max(1, Math.min(total, 8)) + d.phase;
+    const ahead = d.type === 'striker' ? 58 * player.facing + Math.sin(runTime * 3 + d.phase) * 22 : 0;
+    return {
+      x: player.x + player.w / 2 + ahead + Math.cos(a) * (48 + ring * 18),
+      y: player.y + 18 + Math.sin(a) * (24 + ring * 8) - ring * 5
+    };
   }
 
   function grantPowerup(kind, x, y) {
@@ -537,8 +624,8 @@
       return;
     }
     if (kind === 'dronepod') {
-      player.drones = Math.min(5, player.drones + 1);
-      addText('LASER DRONE +' + player.drones, x, y, '#77f7ff');
+      const d = addDrone();
+      addText(d.name.toUpperCase() + ' #' + droneCount(), x, y, d.color);
       beep(900, 0.14, 'sine', 0.055, 1.6);
       return;
     }
@@ -637,6 +724,7 @@
       }, extra));
       const shot = bullets[bullets.length - 1];
       if (boosted) shot.damage += shot.type === 'spread' ? 0.5 : 1;
+      particles.push({ x: sx + Math.cos(ang) * 8, y: sy + Math.sin(ang) * 8, vx: Math.cos(ang) * 90, vy: Math.sin(ang) * 90, r: w.id === 'rocket' ? 8 : 4, life: 0.08, max: 0.08, color: w.color });
     };
     const a = Math.atan2(aim.y, aim.x);
     if (w.id === 'rifle') make(a, 720, { r: 4, damage: 1, ttl: 1.15 });
@@ -649,6 +737,9 @@
       if (Math.random() < 0.45) make(a + rand(-0.2, 0.2), 385, { r: 6, damage: 1, ttl: 0.42, gravity: -180, pierce: 1 });
     }
     if (w.id === 'rocket') make(a, 500, { r: 7, damage: 4, ttl: 1.35, explosive: true, smoke: 0 });
+    // Weapon firing gets muzzle flash/recoil feel from particles/audio only;
+    // don't shake the whole screen on every shot.
+    camera.shake = Math.max(camera.shake, w.id === 'rocket' ? 0.8 : w.id === 'laser' ? 0.35 : 0.15);
     beep(w.id === 'rocket' ? 130 : w.id === 'laser' ? 780 : 410, w.id === 'rocket' ? 0.13 : 0.035, w.id === 'laser' ? 'sine' : 'square', 0.04, w.id === 'laser' ? 1.8 : 0.72);
   }
 
@@ -685,20 +776,52 @@
   }
 
   function updateDrones(dt) {
-    if (!player.drones || player.dead) return;
-    player.droneTimer -= dt;
-    if (player.droneTimer > 0) return;
-    player.droneTimer = player.overdrive > 0 || cheats.hyper ? 0.24 : 0.42;
-    for (let i = 0; i < player.drones; i++) {
-      const a = runTime * 2.5 + i * Math.PI * 2 / player.drones;
-      const dx = player.x + player.w / 2 + Math.cos(a) * 46;
-      const dy = player.y + 18 + Math.sin(a) * 24;
-      const target = nearestTarget(dx, dy, 620);
+    if (!Array.isArray(player.drones) || !player.drones.length || player.dead) return;
+    const total = player.drones.length;
+    for (let i = 0; i < total; i++) {
+      const d = player.drones[i];
+      const pos = dronePos(i, total, d);
+      d.cd -= dt;
+
+      if (d.type === 'shield') {
+        player.shield = Math.max(player.shield, 2.5);
+        for (const b of enemyBullets) {
+          if (b.ttl > 0 && Math.hypot(b.x - pos.x, b.y - pos.y) < 45) {
+            b.ttl = -1;
+            startExplosion(b.x, b.y, d.color, 5, 0.35);
+            d.cd = Math.max(d.cd, 0.08);
+          }
+        }
+        continue;
+      }
+
+      if (d.type === 'repair') {
+        if (d.cd <= 0 && player.hp < player.maxHp) {
+          player.hp = Math.min(player.maxHp, player.hp + 1);
+          addText('+', player.x + player.w / 2, player.y - 8, d.color);
+          d.cd = 5.0;
+        }
+        continue;
+      }
+
+      if (d.cd > 0) continue;
+      const range = d.type === 'striker' ? 820 : d.type === 'blaster' ? 680 : 620;
+      const target = nearestTarget(pos.x, pos.y, range);
       if (!target) continue;
-      const ang = Math.atan2(target.y - dy, target.x - dx);
-      bullets.push({ x: dx, y: dy, vx: Math.cos(ang) * 880, vy: Math.sin(ang) * 880, r: 4, damage: 1, ttl: 0.55, color: '#77f7ff', pierce: 2, type: 'laser' });
-      if (i === 0) beep(1050, 0.025, 'sine', 0.018, 1.25);
+      const ang = Math.atan2(target.y - pos.y, target.x - pos.x);
+      if (d.type === 'laser') {
+        bullets.push({ x: pos.x, y: pos.y, vx: Math.cos(ang) * 900, vy: Math.sin(ang) * 900, r: 4, damage: 1, ttl: 0.55, color: d.color, pierce: 2, type: 'laser' });
+        d.cd = player.overdrive > 0 || cheats.hyper ? 0.25 : 0.42;
+      } else if (d.type === 'striker') {
+        bullets.push({ x: pos.x, y: pos.y, vx: Math.cos(ang) * 620, vy: Math.sin(ang) * 620, r: 6, damage: 3, ttl: 1.0, color: d.color, pierce: 0, type: 'rocket', explosive: true, smoke: 0 });
+        d.cd = player.overdrive > 0 || cheats.hyper ? 0.75 : 1.25;
+      } else if (d.type === 'blaster') {
+        bullets.push({ x: pos.x, y: pos.y, vx: Math.cos(ang) * 520, vy: Math.sin(ang) * 520, r: 10, damage: 4, ttl: 1.05, color: d.color, pierce: 1, type: 'ion', explosive: true, smoke: 0 });
+        d.cd = player.overdrive > 0 || cheats.hyper ? 1.1 : 1.9;
+      }
+      if (i === 0) beep(d.type === 'blaster' ? 220 : 1050, 0.025, d.type === 'laser' ? 'sine' : 'square', 0.018, 1.25);
     }
+    enemyBullets = enemyBullets.filter(b => b.ttl > 0);
   }
 
   function enemyShoot(e, speed = 260, spread = 0) {
@@ -764,6 +887,7 @@
 
     if (input.shoot || input.mouse.down) shootPlayer();
 
+    const wasOnGround = player.onGround;
     const oldY = player.y;
     player.vy += GRAVITY * dt;
     player.x += player.vx * dt;
@@ -785,6 +909,11 @@
         player.vy = 0;
         player.onGround = true;
       }
+    }
+
+    if (!wasOnGround && player.onGround && player.vy === 0) {
+      for (let i = 0; i < 8; i++) particles.push({ x: player.x + player.w / 2 + rand(-12, 12), y: player.y + player.h - 3, vx: rand(-85, 85), vy: rand(-70, -15), r: rand(2, 5), life: rand(0.18, 0.38), max: 0.38, color: level.theme.groundTop });
+      camera.shake = Math.max(camera.shake, 2.5);
     }
 
     for (const crate of level.crates) {
@@ -837,12 +966,23 @@
         if (e.cd <= 0 && dist < 520) { enemyShoot(e, 300, 0.12); e.cd = rand(1.25, 2.1); }
       } else if (e.type === 'turret') {
         if (e.cd <= 0 && dist < 700) { enemyShoot(e, 315, 0.04); e.cd = rand(0.9, 1.5); }
+      } else if (e.type === 'sniper') {
+        if (e.cd <= 0 && dist < 820) { enemyShoot(e, 430, 0.015); e.cd = rand(1.05, 1.7); }
+      } else if (e.type === 'heavy') {
+        e.vx = e.dir * (dist < 500 ? 52 : 18);
+        e.x += e.vx * dt;
+        if (e.cd <= 0 && dist < 620) {
+          enemyShoot(e, 250, 0.16);
+          enemyShoot({ x: e.x, y: e.y + 16, w: e.w, h: e.h }, 285, 0.1);
+          e.cd = rand(1.4, 2.1);
+        }
+        if (rectsOverlap(e, player)) damagePlayer(2, e.x);
       } else if (e.type === 'drone') {
         e.x += Math.sin(e.t * 1.8) * 28 * dt + e.dir * (dist < 420 ? 18 : 0) * dt;
         e.y = e.baseY + Math.sin(e.t * 3.2) * 28;
         if (e.cd <= 0 && dist < 620) { enemyShoot(e, 250, 0.1); e.cd = rand(1.0, 1.8); }
       }
-      if (e.type !== 'drone' && e.type !== 'jumper') e.y = level.ground - e.h;
+      if (e.type !== 'drone' && e.type !== 'jumper' && e.type !== 'sniper') e.y = level.ground - e.h;
       if (rectsOverlap(e, player)) damagePlayer(1, e.x);
     }
   }
@@ -965,10 +1105,11 @@
       }
     }
     if (boss.spawnTimer <= 0) {
-      const d = makeEnemy('drone', boss.x - 120, rand(140, 235));
-      d.baseY = d.y;
+      const type = boss.phase === 2 && Math.random() < 0.45 ? 'heavy' : 'drone';
+      const d = makeEnemy(type, boss.x - 120, type === 'drone' ? rand(140, 235) : undefined);
+      if (type === 'drone') d.baseY = d.y;
       enemies.push(d);
-      boss.spawnTimer = boss.phase === 2 ? 2.3 : 3.7;
+      boss.spawnTimer = boss.phase === 2 ? 1.8 : 3.0;
     }
     if (Math.sin(boss.timer * (boss.phase + 1) * 2) > 0.96) {
       enemyBullets.push({ x: boss.x + 72, y: boss.y + 166, vx: -390, vy: rand(-95, 95), r: 8, damage: 2, ttl: 3, color: '#b16cff' });
@@ -1030,7 +1171,7 @@
     }
     if (state === 'levelclear') {
       updateParticles(dt);
-      if (consume('start') || consume('shoot') || consume('jump')) nextLevel();
+      if (stateTime > 1.25 && (consume('start') || consume('shoot') || consume('jump'))) nextLevel();
       return;
     }
     if (state === 'gameover' || state === 'victory') {
@@ -1075,9 +1216,19 @@
     ctx.fillRect(0, 0, VIEW_W, VIEW_H);
 
     ctx.fillStyle = theme.sun;
+    ctx.shadowColor = theme.sun;
+    ctx.shadowBlur = 28;
     ctx.beginPath();
     ctx.arc(812 - sx * 0.03, 82, 30, 0, Math.PI * 2);
     ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = 'rgba(255,255,255,.10)';
+    for (let i = 0; i < 8; i++) {
+      const cx = ((i * 260 - sx * (0.05 + i * 0.01)) % (VIEW_W + 360)) - 160;
+      ctx.beginPath();
+      ctx.ellipse(cx, 92 + i * 18 + Math.sin(t + i) * 3, 90 + i * 9, 10 + (i % 3) * 4, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
 
     function hills(color, par, base, amp, step) {
       ctx.fillStyle = color;
@@ -1095,6 +1246,47 @@
     hills(theme.hill1, 0.10, 276, 38, 40);
     hills(theme.hill2, 0.22, 342, 45, 36);
     hills(theme.hill3, 0.38, 397, 32, 30);
+
+    // Late-90s arcade-style layered set dressing: bases, waterfalls, towers, alien machinery.
+    for (const p of level.props) {
+      const x = Math.floor(p.x - sx * 0.46);
+      if (x < -220 || x > VIEW_W + 220) continue;
+      const baseY = level.ground + 4;
+      ctx.save();
+      ctx.globalAlpha = 0.78;
+      if (p.kind === 'waterfall' || p.kind === 'icefall') {
+        const wg = ctx.createLinearGradient(0, baseY - p.h, 0, baseY);
+        wg.addColorStop(0, p.kind === 'icefall' ? 'rgba(190,245,255,.75)' : 'rgba(90,210,255,.55)');
+        wg.addColorStop(1, 'rgba(40,110,170,.12)');
+        ctx.fillStyle = wg;
+        roundRect(x, baseY - p.h, p.w, p.h + 20, 12); ctx.fill();
+        ctx.fillStyle = 'rgba(255,255,255,.28)';
+        for (let s = 0; s < 5; s++) ctx.fillRect(x + 12 + s * p.w / 5 + Math.sin(t * 5 + s) * 3, baseY - p.h + 10, 3, p.h - 4);
+      } else if (p.kind === 'bunker' || p.kind === 'ruin') {
+        fillRoundRect(x, baseY - p.h * 0.62, p.w, p.h * 0.62, 10, 'rgba(25,35,38,.75)');
+        fillRoundRect(x + 12, baseY - p.h * 0.48, p.w - 24, 16, 5, 'rgba(255,190,80,.35)');
+        ctx.strokeStyle = 'rgba(255,255,255,.16)'; ctx.lineWidth = 2;
+        for (let yy = baseY - p.h * 0.55; yy < baseY - 10; yy += 24) { ctx.beginPath(); ctx.moveTo(x + 8, yy); ctx.lineTo(x + p.w - 8, yy + 8); ctx.stroke(); }
+      } else if (p.kind === 'radar' || p.kind === 'antenna' || p.kind === 'tower') {
+        ctx.strokeStyle = 'rgba(185,225,255,.45)'; ctx.lineWidth = 5;
+        ctx.beginPath(); ctx.moveTo(x + p.w / 2, baseY); ctx.lineTo(x + p.w / 2, baseY - p.h); ctx.stroke();
+        ctx.lineWidth = 2;
+        for (let r = 18; r < 52; r += 14) { ctx.beginPath(); ctx.arc(x + p.w / 2, baseY - p.h, r + Math.sin(t * 2 + p.phase) * 2, -0.6, 0.6); ctx.stroke(); }
+        fillRoundRect(x + p.w / 2 - 16, baseY - p.h - 10, 32, 20, 6, 'rgba(210,245,255,.55)');
+      } else if (p.kind === 'hivepod' || p.kind === 'ribcage' || p.kind === 'obelisk' || p.kind === 'vent') {
+        ctx.shadowColor = 'rgba(255,83,215,.45)'; ctx.shadowBlur = 18;
+        ctx.fillStyle = p.kind === 'ribcage' ? 'rgba(210,120,255,.28)' : 'rgba(110,32,125,.62)';
+        if (p.kind === 'obelisk') {
+          ctx.beginPath(); ctx.moveTo(x + p.w / 2, baseY - p.h); ctx.lineTo(x + p.w, baseY); ctx.lineTo(x, baseY); ctx.closePath(); ctx.fill();
+        } else {
+          ctx.beginPath(); ctx.ellipse(x + p.w / 2, baseY - p.h * 0.45, p.w / 2, p.h * 0.45, 0, 0, Math.PI * 2); ctx.fill();
+          ctx.strokeStyle = 'rgba(255,130,240,.5)'; ctx.lineWidth = 4;
+          for (let r = 0; r < 4; r++) { ctx.beginPath(); ctx.arc(x + p.w / 2, baseY - p.h * 0.4, 18 + r * 15, 0.5, 2.7); ctx.stroke(); }
+        }
+        ctx.shadowBlur = 0;
+      }
+      ctx.restore();
+    }
 
     for (const d of level.decorations) {
       const x = Math.floor(d.x - sx * 0.62);
@@ -1150,51 +1342,78 @@
   }
 
   function drawWorld() {
-    const shakeX = camera.shake ? rand(-camera.shake, camera.shake) : 0;
-    const shakeY = camera.shake ? rand(-camera.shake, camera.shake) : 0;
+    // Smooth camera trauma instead of per-frame random jitter.
+    // This avoids the distracting full-screen shudder when firing rockets/lasers.
+    const trauma = camera.shake || 0;
+    const shakeX = trauma > 1 ? Math.sin(runTime * 87) * trauma : 0;
+    const shakeY = trauma > 6 ? Math.cos(runTime * 71) * trauma * 0.28 : 0;
     ctx.save();
     ctx.translate(Math.floor(-camera.x + shakeX), Math.floor(shakeY));
 
     // ground and pits
     const theme = level.theme || LEVELS[0].theme;
-    ctx.fillStyle = theme.ground;
     let gx = 0;
     const sorted = [...level.pits, { x: level.width, w: 0 }];
     for (const p of sorted) {
       if (p.x > gx) {
+        const g = ctx.createLinearGradient(0, level.ground, 0, VIEW_H);
+        g.addColorStop(0, theme.groundTop);
+        g.addColorStop(0.08, theme.ground);
+        g.addColorStop(1, '#05070d');
+        ctx.fillStyle = g;
         ctx.fillRect(gx, level.ground, p.x - gx, VIEW_H - level.ground);
-        ctx.fillStyle = theme.groundTop;
-        ctx.fillRect(gx, level.ground, p.x - gx, 12);
-        ctx.fillStyle = theme.ground;
+        ctx.fillStyle = 'rgba(255,255,255,.16)';
+        ctx.fillRect(gx, level.ground, p.x - gx, 3);
+        ctx.fillStyle = 'rgba(0,0,0,.20)';
+        for (let tx = Math.floor(gx / 64) * 64; tx < p.x; tx += 64) ctx.fillRect(tx + 8, level.ground + 22 + ((tx / 64) % 3) * 8, 34, 3);
       }
       gx = p.x + p.w;
     }
-    ctx.fillStyle = 'rgba(0,0,0,.25)';
-    for (const p of level.pits) ctx.fillRect(p.x, level.ground, p.w, VIEW_H - level.ground);
+    for (const p of level.pits) {
+      const pit = ctx.createLinearGradient(0, level.ground, 0, VIEW_H);
+      pit.addColorStop(0, 'rgba(0,0,0,.35)');
+      pit.addColorStop(1, 'rgba(0,0,0,.9)');
+      ctx.fillStyle = pit;
+      ctx.fillRect(p.x, level.ground, p.w, VIEW_H - level.ground);
+      ctx.fillStyle = levelIndex === 2 ? 'rgba(255,83,215,.25)' : 'rgba(70,180,255,.10)';
+      ctx.fillRect(p.x + 8, level.ground + 18, p.w - 16, 4);
+    }
 
     // platforms
     for (const p of level.platforms) {
-      ctx.fillStyle = theme.platform;
-      ctx.fillRect(p.x, p.y, p.w, p.h);
-      ctx.fillStyle = theme.platformTop;
-      ctx.fillRect(p.x, p.y, p.w, 7);
-      ctx.fillStyle = 'rgba(0,0,0,.28)';
-      ctx.fillRect(p.x + 8, p.y + 12, p.w - 16, 5);
+      ctx.shadowColor = 'rgba(0,0,0,.45)';
+      ctx.shadowBlur = 10;
+      ctx.shadowOffsetY = 8;
+      fillRoundRect(p.x, p.y, p.w, p.h, 7, theme.platform);
+      ctx.shadowBlur = 0;
+      const pg = ctx.createLinearGradient(0, p.y, 0, p.y + p.h);
+      pg.addColorStop(0, theme.platformTop);
+      pg.addColorStop(0.38, theme.platform);
+      pg.addColorStop(1, 'rgba(0,0,0,.55)');
+      fillRoundRect(p.x, p.y, p.w, p.h, 7, pg);
+      ctx.fillStyle = 'rgba(255,255,255,.18)';
+      ctx.fillRect(p.x + 10, p.y + 4, p.w - 20, 2);
     }
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetY = 0;
+    ctx.shadowColor = 'transparent';
 
     // crates
     for (const c of level.crates) {
       if (c.hp <= 0) continue;
-      ctx.fillStyle = theme.crate;
-      ctx.fillRect(c.x, c.y, c.w, c.h);
+      const cg = ctx.createLinearGradient(c.x, c.y, c.x + c.w, c.y + c.h);
+      cg.addColorStop(0, theme.crateLine);
+      cg.addColorStop(0.45, theme.crate);
+      cg.addColorStop(1, '#26150f');
+      fillRoundRect(c.x, c.y, c.w, c.h, 7, cg);
       ctx.strokeStyle = theme.crateLine;
       ctx.lineWidth = 3;
-      ctx.strokeRect(c.x + 3, c.y + 3, c.w - 6, c.h - 6);
+      strokeRoundRect(c.x + 3, c.y + 3, c.w - 6, c.h - 6, 5, theme.crateLine, 3);
       ctx.beginPath();
-      ctx.moveTo(c.x + 6, c.y + 6);
-      ctx.lineTo(c.x + c.w - 6, c.y + c.h - 6);
-      ctx.moveTo(c.x + c.w - 6, c.y + 6);
-      ctx.lineTo(c.x + 6, c.y + c.h - 6);
+      ctx.moveTo(c.x + 8, c.y + 8);
+      ctx.lineTo(c.x + c.w - 8, c.y + c.h - 8);
+      ctx.moveTo(c.x + c.w - 8, c.y + 8);
+      ctx.lineTo(c.x + 8, c.y + c.h - 8);
       ctx.stroke();
     }
 
@@ -1210,159 +1429,258 @@
 
   function drawPlayer() {
     if (player.dead) return;
-    if (player.invuln > 0 && Math.floor(runTime * 18) % 2 === 0) return;
+    if (player.invuln > 0 && !cheats.god && Math.floor(runTime * 18) % 2 === 0) return;
     const x = player.x, y = player.y, w = player.w, h = player.h;
     const crouch = player.crouch;
-    const bodyH = crouch ? 29 : 39;
-    const headY = y + (crouch ? 13 : 2);
+    const stride = player.onGround ? Math.sin(runTime * 15) * clamp(Math.abs(player.vx) / 290, 0, 1) : 0;
+    const lean = clamp(player.vx / 600, -0.18, 0.18);
     ctx.save();
-    ctx.translate(x + w / 2, 0);
-    ctx.scale(player.facing, 1);
-    ctx.translate(-w / 2, 0);
-    ctx.fillStyle = player.shield > 0 ? '#63e7ff' : '#ef4141';
-    ctx.fillRect(7, y + h - bodyH - 7, 16, bodyH);
-    ctx.fillStyle = '#f3c08a';
-    ctx.fillRect(8, headY, 14, 14);
-    ctx.fillStyle = '#222b35';
-    ctx.fillRect(6, headY - 3, 18, 5);
-    ctx.fillStyle = '#283f70';
-    ctx.fillRect(3, y + h - 22, 9, 22);
-    ctx.fillRect(18, y + h - 22, 9, 22);
-    ctx.fillStyle = '#f3c08a';
-    ctx.fillRect(19, y + (crouch ? 30 : 23), 18, 6);
-    ctx.fillStyle = '#20262e';
-    ctx.fillRect(32, y + (crouch ? 28 : 21), 22, 6);
-    ctx.restore();
+    ctx.globalAlpha = 0.38;
+    ctx.fillStyle = '#000';
+    ctx.beginPath();
+    ctx.ellipse(x + w / 2, y + h + 4, 24, 7, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+
     if (player.shield > 0) {
-      ctx.strokeStyle = 'rgba(99,231,255,.55)';
-      ctx.lineWidth = 3;
+      const pulse = 1 + Math.sin(runTime * 7) * 0.05;
+      ctx.save();
+      ctx.shadowColor = '#63e7ff';
+      ctx.shadowBlur = 20;
+      ctx.strokeStyle = cheats.god ? 'rgba(255,207,64,.75)' : 'rgba(99,231,255,.62)';
+      ctx.lineWidth = 4;
       ctx.beginPath();
-      ctx.ellipse(x + w / 2, y + h / 2, 25, 34, 0, 0, Math.PI * 2);
+      ctx.ellipse(x + w / 2, y + h / 2, 30 * pulse, 40 * pulse, 0, 0, Math.PI * 2);
       ctx.stroke();
+      ctx.restore();
     }
+
+    ctx.save();
+    ctx.translate(x + w / 2, y + h / 2);
+    ctx.scale(player.facing, 1);
+    ctx.rotate(lean * player.facing);
+    ctx.translate(-w / 2, -h / 2);
+    const suit = ctx.createLinearGradient(0, 0, 0, h);
+    suit.addColorStop(0, player.overdrive > 0 ? '#ff6cff' : '#ff5b4d');
+    suit.addColorStop(0.5, player.shield > 0 ? '#2cc7ff' : '#b51f2f');
+    suit.addColorStop(1, '#361224');
+    fillRoundRect(5, crouch ? 18 : 13, 20, crouch ? 28 : 36, 8, suit);
+    ctx.fillStyle = 'rgba(255,255,255,.28)';
+    ctx.fillRect(10, crouch ? 21 : 17, 4, crouch ? 18 : 25);
+    ctx.fillStyle = '#ffe0b0';
+    roundRect(7, crouch ? 8 : 0, 16, 16, 7); ctx.fill();
+    const visor = ctx.createLinearGradient(0, 0, 22, 0);
+    visor.addColorStop(0, '#111827'); visor.addColorStop(1, '#63e7ff');
+    fillRoundRect(4, crouch ? 6 : -2, 22, 7, 3, visor);
+
+    ctx.strokeStyle = '#ffe0b0';
+    ctx.lineWidth = 5;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(20, crouch ? 27 : 23);
+    ctx.lineTo(35, crouch ? 25 : 21);
+    ctx.stroke();
+    ctx.strokeStyle = '#1a2230';
+    ctx.lineWidth = 7;
+    ctx.beginPath();
+    ctx.moveTo(32, crouch ? 24 : 20);
+    ctx.lineTo(56, crouch ? 22 : 18);
+    ctx.stroke();
+    ctx.strokeStyle = weaponInfo().color;
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(42, crouch ? 18 : 14); ctx.lineTo(58, crouch ? 17 : 13); ctx.stroke();
+
+    ctx.strokeStyle = '#1e3a66';
+    ctx.lineWidth = 7;
+    ctx.beginPath();
+    ctx.moveTo(10, 43); ctx.lineTo(6 - stride * 4, 56); ctx.lineTo(4 - stride * 7, 64);
+    ctx.moveTo(20, 43); ctx.lineTo(22 + stride * 4, 56); ctx.lineTo(25 + stride * 7, 64);
+    ctx.stroke();
+    ctx.strokeStyle = '#0d1320';
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    ctx.moveTo(0 - stride * 7, 64); ctx.lineTo(10 - stride * 7, 64);
+    ctx.moveTo(21 + stride * 7, 64); ctx.lineTo(31 + stride * 7, 64);
+    ctx.stroke();
+    ctx.restore();
+    ctx.restore();
   }
 
   function drawDrones() {
-    if (!player || !player.drones || player.dead) return;
-    for (let i = 0; i < player.drones; i++) {
-      const a = runTime * 2.5 + i * Math.PI * 2 / player.drones;
-      const x = player.x + player.w / 2 + Math.cos(a) * 46;
-      const y = player.y + 18 + Math.sin(a) * 24;
-      ctx.fillStyle = 'rgba(119,247,255,.22)';
-      ctx.beginPath();
-      ctx.arc(x, y, 13, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = '#77f7ff';
-      ctx.fillRect(x - 8, y - 5, 16, 10);
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(x - 3, y - 2, 6, 4);
+    if (!player || !Array.isArray(player.drones) || !player.drones.length || player.dead) return;
+    ctx.save();
+    const total = player.drones.length;
+    for (let i = 0; i < total; i++) {
+      const d = player.drones[i];
+      const { x, y } = dronePos(i, total, d);
+      ctx.shadowColor = d.color;
+      ctx.shadowBlur = 16;
+      ctx.fillStyle = d.type === 'shield' ? 'rgba(99,231,255,.16)' : 'rgba(119,247,255,.18)';
+      ctx.beginPath(); ctx.arc(x, y, d.type === 'shield' ? 22 : 15, 0, Math.PI * 2); ctx.fill();
+      const g = ctx.createLinearGradient(x - 12, y - 9, x + 12, y + 9);
+      g.addColorStop(0, '#ffffff'); g.addColorStop(0.42, d.color); g.addColorStop(1, '#1d2740');
+      if (d.type === 'striker') {
+        ctx.save(); ctx.translate(x, y); ctx.rotate(player.facing > 0 ? 0 : Math.PI);
+        ctx.beginPath(); ctx.moveTo(15, 0); ctx.lineTo(-9, -9); ctx.lineTo(-5, 0); ctx.lineTo(-9, 9); ctx.closePath(); ctx.fillStyle = g; ctx.fill(); ctx.restore();
+      } else if (d.type === 'blaster') {
+        ctx.beginPath(); ctx.arc(x, y, 12, 0, Math.PI * 2); ctx.fillStyle = g; ctx.fill();
+        fillRoundRect(x - 4, y - 15, 8, 30, 4, '#251433');
+      } else if (d.type === 'shield') {
+        strokeRoundRect(x - 13, y - 10, 26, 20, 10, d.color, 4);
+      } else if (d.type === 'repair') {
+        fillRoundRect(x - 11, y - 8, 22, 16, 7, g);
+        ctx.fillStyle = '#10301f'; ctx.fillRect(x - 2, y - 7, 4, 14); ctx.fillRect(x - 7, y - 2, 14, 4);
+      } else {
+        fillRoundRect(x - 10, y - 6, 20, 12, 6, g);
+        ctx.fillStyle = '#ffffff'; ctx.beginPath(); ctx.arc(x + 4, y - 1, 3, 0, Math.PI * 2); ctx.fill();
+      }
     }
+    ctx.restore();
   }
 
   function drawEnemy(e) {
     const flash = e.hit > 0;
     ctx.save();
-    ctx.fillStyle = flash ? '#fff' : e.type === 'drone' ? '#77c8d7' : e.type === 'turret' ? '#666f7d' : '#d9c16b';
+    ctx.globalAlpha = 0.3;
+    ctx.fillStyle = '#000';
+    ctx.beginPath(); ctx.ellipse(e.x + e.w / 2, e.y + e.h + 3, e.w * 0.55, 6, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.shadowColor = flash ? '#fff' : 'rgba(255,70,70,.35)';
+    ctx.shadowBlur = flash ? 18 : 6;
     if (e.type === 'turret') {
-      ctx.fillRect(e.x, e.y + 15, e.w, e.h - 15);
-      ctx.fillStyle = flash ? '#fff' : '#232a35';
-      ctx.fillRect(e.x + (e.dir < 0 ? -26 : e.w - 2), e.y + 19, 28, 7);
-      ctx.fillStyle = '#ff4d63';
-      ctx.fillRect(e.x + 10, e.y + 6, 22, 16);
+      const g = ctx.createLinearGradient(e.x, e.y, e.x, e.y + e.h);
+      g.addColorStop(0, flash ? '#fff' : '#9ba4b4');
+      g.addColorStop(1, '#353c49');
+      fillRoundRect(e.x, e.y + 12, e.w, e.h - 12, 8, g);
+      fillRoundRect(e.x + (e.dir < 0 ? -30 : e.w - 2), e.y + 18, 32, 9, 4, '#151b25');
+      fillRoundRect(e.x + 8, e.y + 4, 26, 18, 7, flash ? '#fff' : '#ff4d63');
     } else if (e.type === 'drone') {
+      const g = ctx.createRadialGradient(e.x + e.w / 2, e.y + e.h / 2, 4, e.x + e.w / 2, e.y + e.h / 2, e.w / 2);
+      g.addColorStop(0, flash ? '#fff' : '#c8fbff');
+      g.addColorStop(1, '#247496');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.ellipse(e.x + e.w / 2, e.y + e.h / 2, e.w / 2, e.h / 2, 0, 0, Math.PI * 2); ctx.fill();
+      fillRoundRect(e.x + 8, e.y + 10, e.w - 16, 7, 3, '#18334b');
+      ctx.strokeStyle = '#c8fbff'; ctx.lineWidth = 3;
       ctx.beginPath();
-      ctx.ellipse(e.x + e.w / 2, e.y + e.h / 2, e.w / 2, e.h / 2, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = '#18334b';
-      ctx.fillRect(e.x + 8, e.y + 10, e.w - 16, 7);
-      ctx.strokeStyle = '#c8fbff';
-      ctx.beginPath();
-      ctx.moveTo(e.x - 12, e.y + 4);
-      ctx.lineTo(e.x + 4, e.y + 12);
-      ctx.moveTo(e.x + e.w + 12, e.y + 4);
-      ctx.lineTo(e.x + e.w - 4, e.y + 12);
+      ctx.moveTo(e.x - 12, e.y + 4); ctx.lineTo(e.x + 4, e.y + 12);
+      ctx.moveTo(e.x + e.w + 12, e.y + 4); ctx.lineTo(e.x + e.w - 4, e.y + 12);
       ctx.stroke();
     } else {
-      ctx.fillRect(e.x + 8, e.y + 12, e.w - 16, e.h - 14);
-      ctx.fillStyle = flash ? '#fff' : '#7b3b24';
-      ctx.fillRect(e.x + 10, e.y + 1, e.w - 20, 15);
-      ctx.fillStyle = '#20262e';
-      ctx.fillRect(e.x + (e.dir < 0 ? -14 : e.w - 1), e.y + 23, 20, 5);
-      if (e.type === 'runner') {
-        ctx.fillStyle = '#ff654d';
-        ctx.fillRect(e.x + 5, e.y + 20, e.w - 10, 8);
-      }
+      const stride = Math.sin(e.t * 10) * 4;
+      const armor = ctx.createLinearGradient(e.x, e.y, e.x, e.y + e.h);
+      armor.addColorStop(0, flash ? '#fff' : '#f0d87b');
+      armor.addColorStop(0.55, e.type === 'runner' ? '#e65b39' : e.type === 'heavy' ? '#7f8b9a' : e.type === 'sniper' ? '#4cc7a5' : '#97773b');
+      armor.addColorStop(1, '#2b1b18');
+      fillRoundRect(e.x + 7, e.y + 12, e.w - 14, e.h - 16, 8, armor);
+      fillRoundRect(e.x + 9, e.y + 1, e.w - 18, 17, 7, flash ? '#fff' : e.type === 'sniper' ? '#17382f' : '#7b3b24');
+      ctx.strokeStyle = '#18202b'; ctx.lineWidth = 5; ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(e.x + e.w / 2, e.y + 38); ctx.lineTo(e.x + 9 + stride, e.y + e.h);
+      ctx.moveTo(e.x + e.w / 2, e.y + 38); ctx.lineTo(e.x + e.w - 9 - stride, e.y + e.h);
+      ctx.stroke();
+      fillRoundRect(e.x + (e.dir < 0 ? (e.type === 'sniper' ? -30 : -16) : e.w - 1), e.y + 23, e.type === 'sniper' ? 36 : 22, e.type === 'heavy' ? 9 : 6, 3, '#20262e');
+      if (e.type === 'heavy') { fillRoundRect(e.x + 10, e.y + 25, e.w - 20, 10, 5, '#ffcf40'); }
     }
-    ctx.fillStyle = '#101010';
-    ctx.fillRect(e.x, e.y - 7, e.w, 3);
-    ctx.fillStyle = '#ff5252';
-    ctx.fillRect(e.x, e.y - 7, e.w * Math.max(0, e.hp / e.maxHp), 3);
+    ctx.shadowBlur = 0;
+    fillRoundRect(e.x, e.y - 9, e.w, 5, 3, '#101010');
+    fillRoundRect(e.x, e.y - 9, e.w * Math.max(0, e.hp / e.maxHp), 5, 3, '#ff5252');
     ctx.restore();
   }
 
   function drawBoss() {
-    if (!boss.active && camera.x < 7300) return;
+    if (!boss.active && camera.x < boss.x - VIEW_W) return;
     if (boss.dead) return;
-    ctx.fillStyle = '#293244';
-    ctx.fillRect(boss.x, boss.y, boss.w, boss.h);
-    ctx.fillStyle = '#151b26';
-    ctx.fillRect(boss.x + 35, boss.y + 34, boss.w - 70, boss.h - 34);
-    ctx.fillStyle = boss.phase === 2 ? '#ff3636' : '#8e47ff';
-    ctx.beginPath();
-    ctx.arc(boss.x + 165, boss.y + 126, 56 + Math.sin(runTime * 8) * 4, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#250713';
-    ctx.beginPath();
-    ctx.arc(boss.x + 165, boss.y + 126, 28, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,.65)';
+    ctx.shadowBlur = 22;
+    ctx.shadowOffsetY = 14;
+    const hull = ctx.createLinearGradient(boss.x, boss.y, boss.x, boss.y + boss.h);
+    hull.addColorStop(0, '#566071');
+    hull.addColorStop(0.45, '#293244');
+    hull.addColorStop(1, '#0d111a');
+    fillRoundRect(boss.x, boss.y, boss.w, boss.h, 22, hull);
+    ctx.shadowBlur = 0;
+    fillRoundRect(boss.x + 35, boss.y + 34, boss.w - 70, boss.h - 34, 18, '#151b26');
+    ctx.strokeStyle = 'rgba(255,255,255,.12)'; ctx.lineWidth = 3;
+    strokeRoundRect(boss.x + 8, boss.y + 8, boss.w - 16, boss.h - 16, 18, 'rgba(255,255,255,.15)', 3);
+    const coreColor = boss.phase === 2 ? '#ff3636' : levelIndex === 2 ? '#ff53d7' : '#8e47ff';
+    ctx.shadowColor = coreColor; ctx.shadowBlur = 30;
+    const core = ctx.createRadialGradient(boss.x + 165, boss.y + 126, 10, boss.x + 165, boss.y + 126, 64);
+    core.addColorStop(0, '#fff'); core.addColorStop(0.28, coreColor); core.addColorStop(1, '#250713');
+    ctx.fillStyle = core;
+    ctx.beginPath(); ctx.arc(boss.x + 165, boss.y + 126, 56 + Math.sin(runTime * 8) * 4, 0, Math.PI * 2); ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#250713'; ctx.beginPath(); ctx.arc(boss.x + 165, boss.y + 126, 28, 0, Math.PI * 2); ctx.fill();
     for (const g of boss.guns) {
-      if (g.hp <= 0) { ctx.fillStyle = '#222'; ctx.fillRect(g.x, g.y, g.w, g.h); continue; }
-      ctx.fillStyle = '#6f7683';
-      ctx.fillRect(g.x, g.y, g.w, g.h);
-      ctx.fillStyle = '#111720';
-      ctx.fillRect(g.x - 28, g.y + 17, 34, 10);
-      ctx.fillStyle = '#ffcf40';
-      ctx.fillRect(g.x + 7, g.y + 7, g.w - 14, 6);
+      if (g.hp <= 0) { fillRoundRect(g.x, g.y, g.w, g.h, 8, '#222'); continue; }
+      const gg = ctx.createLinearGradient(g.x, g.y, g.x, g.y + g.h);
+      gg.addColorStop(0, '#a7afbc'); gg.addColorStop(1, '#434b58');
+      fillRoundRect(g.x, g.y, g.w, g.h, 8, gg);
+      fillRoundRect(g.x - 31, g.y + 16, 38, 12, 5, '#111720');
+      fillRoundRect(g.x + 7, g.y + 7, g.w - 14, 6, 3, '#ffcf40');
     }
-    ctx.fillStyle = '#101010';
-    ctx.fillRect(boss.x + 30, boss.y - 18, boss.w - 60, 9);
-    ctx.fillStyle = '#ff3c3c';
-    ctx.fillRect(boss.x + 30, boss.y - 18, (boss.w - 60) * Math.max(0, boss.hp / boss.maxHp), 9);
+    fillRoundRect(boss.x + 30, boss.y - 20, boss.w - 60, 11, 5, '#101010');
+    fillRoundRect(boss.x + 30, boss.y - 20, (boss.w - 60) * Math.max(0, boss.hp / boss.maxHp), 11, 5, '#ff3c3c');
+    ctx.restore();
   }
 
   function drawPowerup(p) {
     const bob = Math.sin(p.t * 7) * 3;
     const info = powerupInfo(p.kind);
-    ctx.fillStyle = 'rgba(0,0,0,.32)';
-    ctx.fillRect(p.x + 3, p.y + 5 + bob, p.w, p.h);
+    const cx = p.x + p.w / 2, cy = p.y + p.h / 2 + bob;
+    ctx.save();
+    ctx.shadowColor = info.color;
+    ctx.shadowBlur = 18;
+    const g = ctx.createRadialGradient(cx, cy, 2, cx, cy, 24);
+    g.addColorStop(0, '#fff'); g.addColorStop(0.45, info.color); g.addColorStop(1, 'rgba(0,0,0,.65)');
+    fillRoundRect(p.x, p.y + bob, p.w, p.h, 9, g);
+    strokeRoundRect(p.x + 2, p.y + 2 + bob, p.w - 4, p.h - 4, 7, 'rgba(255,255,255,.75)', 2);
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = '#14202c'; ctx.lineWidth = 3; ctx.lineCap = 'round';
+    if (info.icon === 'heal') { ctx.beginPath(); ctx.moveTo(cx, cy - 8); ctx.lineTo(cx, cy + 8); ctx.moveTo(cx - 8, cy); ctx.lineTo(cx + 8, cy); ctx.stroke(); }
+    else if (info.icon === 'shield') { ctx.beginPath(); ctx.moveTo(cx, cy - 10); ctx.lineTo(cx + 9, cy - 5); ctx.lineTo(cx + 6, cy + 8); ctx.lineTo(cx, cy + 12); ctx.lineTo(cx - 6, cy + 8); ctx.lineTo(cx - 9, cy - 5); ctx.closePath(); ctx.stroke(); }
+    else if (info.icon === 'drone') { ctx.beginPath(); ctx.ellipse(cx, cy, 11, 7, 0, 0, Math.PI * 2); ctx.stroke(); ctx.beginPath(); ctx.arc(cx + 5, cy - 1, 2, 0, Math.PI * 2); ctx.stroke(); }
+    else if (info.icon === 'boots') { ctx.beginPath(); ctx.moveTo(cx - 8, cy - 6); ctx.lineTo(cx - 8, cy + 8); ctx.lineTo(cx + 5, cy + 8); ctx.moveTo(cx + 1, cy - 6); ctx.lineTo(cx + 1, cy + 8); ctx.lineTo(cx + 12, cy + 8); ctx.stroke(); }
+    else if (info.icon === 'magnet') { ctx.beginPath(); ctx.arc(cx, cy, 10, 0.2, Math.PI - 0.2); ctx.stroke(); }
+    else if (info.icon === 'nova') { ctx.beginPath(); for (let i = 0; i < 8; i++) { const a = i * Math.PI / 4; ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(a) * 12, cy + Math.sin(a) * 12); } ctx.stroke(); }
+    else if (info.icon === 'bolt') { ctx.beginPath(); ctx.moveTo(cx + 2, cy - 12); ctx.lineTo(cx - 6, cy + 2); ctx.lineTo(cx + 2, cy + 2); ctx.lineTo(cx - 2, cy + 12); ctx.stroke(); }
+    else { ctx.fillStyle = '#14202c'; ctx.font = '900 11px monospace'; ctx.textAlign = 'center'; ctx.fillText(info.name.slice(0, 3), cx, cy + 4); }
+    const labelW = Math.max(60, info.label.length * 7 + 14);
+    ctx.shadowColor = 'rgba(0,0,0,.45)'; ctx.shadowBlur = 8;
+    fillRoundRect(cx - labelW / 2, p.y + bob - 20, labelW, 16, 8, 'rgba(5,10,18,.78)');
+    ctx.shadowBlur = 0;
     ctx.fillStyle = info.color;
-    ctx.fillRect(p.x, p.y + bob, p.w, p.h);
-    ctx.strokeStyle = 'rgba(255,255,255,.65)';
-    ctx.strokeRect(p.x + 2, p.y + 2 + bob, p.w - 4, p.h - 4);
-    ctx.fillStyle = '#14202c';
-    ctx.font = 'bold 15px monospace';
+    ctx.font = '900 10px system-ui, sans-serif';
     ctx.textAlign = 'center';
-    ctx.fillText(info.label, p.x + p.w / 2, p.y + bob + 20);
+    ctx.fillText(info.label, cx, p.y + bob - 8);
+    ctx.restore();
   }
 
   function drawBullets() {
+    ctx.save();
     for (const b of bullets) {
+      ctx.shadowColor = b.color;
+      ctx.shadowBlur = b.type === 'laser' ? 18 : 10;
       ctx.fillStyle = b.color;
       if (b.type === 'laser') {
         ctx.save();
         ctx.translate(b.x, b.y);
         ctx.rotate(Math.atan2(b.vy, b.vx));
-        ctx.fillRect(-16, -2, 34, 4);
-        ctx.fillStyle = '#fff';
-        ctx.fillRect(-7, -1, 16, 2);
+        fillRoundRect(-24, -3, 48, 6, 3, b.color);
+        fillRoundRect(-10, -1, 24, 2, 1, '#fff');
         ctx.restore();
       } else {
         ctx.beginPath();
         ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
         ctx.fill();
+        ctx.fillStyle = 'rgba(255,255,255,.75)';
+        ctx.beginPath(); ctx.arc(b.x - b.r * 0.25, b.y - b.r * 0.25, b.r * 0.38, 0, Math.PI * 2); ctx.fill();
       }
     }
     for (const b of enemyBullets) {
+      ctx.shadowColor = b.color;
+      ctx.shadowBlur = 12;
       ctx.fillStyle = b.color;
       ctx.beginPath();
       ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
@@ -1372,6 +1690,7 @@
       ctx.arc(b.x, b.y, b.r * 0.45, 0, Math.PI * 2);
       ctx.fill();
     }
+    ctx.restore();
   }
 
   function drawParticles() {
@@ -1426,10 +1745,10 @@
     ctx.fillRect(276, 24, 72, 8);
     ctx.fillStyle = '#b16cff';
     ctx.fillRect(276, 24, 72 * Math.max(0, player.energy / player.maxEnergy), 8);
-    if (player.drones > 0 || player.overdrive > 0 || player.boots > 0 || player.magnet > 0 || cheats.god) {
+    if (droneCount() > 0 || player.overdrive > 0 || player.boots > 0 || player.magnet > 0 || cheats.god) {
       ctx.font = 'bold 12px monospace';
       ctx.fillStyle = cheats.god ? '#ffcf40' : '#77f7ff';
-      const status = [cheats.god ? 'GOD' : '', player.drones ? 'DRONES ' + player.drones : '', player.overdrive > 0 ? 'OD' : '', player.boots > 0 ? 'BOOTS' : '', player.magnet > 0 ? 'MAG' : ''].filter(Boolean).join('  ');
+      const status = [cheats.god ? 'GOD' : '', droneCount() ? 'DRONES ' + droneCount() : '', player.overdrive > 0 ? 'OD' : '', player.boots > 0 ? 'BOOTS' : '', player.magnet > 0 ? 'MAG' : ''].filter(Boolean).join('  ');
       ctx.fillText(status, 380, 39);
       ctx.font = 'bold 18px monospace';
     }
@@ -1497,14 +1816,27 @@
     ctx.textAlign = 'center';
     ctx.fillStyle = '#78ff7d';
     ctx.font = '900 46px monospace';
-    ctx.fillText('LEVEL ' + (levelIndex + 1) + ' CLEARED', VIEW_W / 2, 202);
+    ctx.fillText('BOSS DESTROYED!', VIEW_W / 2, 184);
+    ctx.fillStyle = '#78ff7d';
+    ctx.font = '900 34px monospace';
+    ctx.fillText('LEVEL ' + (levelIndex + 1) + ' CLEARED', VIEW_W / 2, 230);
     ctx.fillStyle = '#fff';
     ctx.font = 'bold 20px monospace';
-    ctx.fillText(level.bossName + ' destroyed.', VIEW_W / 2, 246);
+    ctx.fillText(level.bossName + ' exploded. You survived.', VIEW_W / 2, 270);
     ctx.fillStyle = '#ffcf40';
-    ctx.fillText('Next: ' + LEVELS[levelIndex + 1].name + ' — ' + LEVELS[levelIndex + 1].subtitle, VIEW_W / 2, 292);
-    ctx.fillStyle = Math.floor(stateTime * 3) % 2 ? '#fff' : '#ffcf40';
-    ctx.fillText('PRESS ENTER / F / SPACE TO CONTINUE', VIEW_W / 2, 352);
+    ctx.fillText('Going to next level: ' + LEVELS[levelIndex + 1].name, VIEW_W / 2, 316);
+    ctx.fillStyle = stateTime < 1.25 ? 'rgba(255,255,255,.55)' : (Math.floor(stateTime * 3) % 2 ? '#fff' : '#ffcf40');
+    ctx.fillText(stateTime < 1.25 ? 'STAGE CLEAR BONUS...' : 'PRESS ENTER / F / SPACE TO CONTINUE', VIEW_W / 2, 370);
+  }
+
+  function drawPostFX() {
+    const vignette = ctx.createRadialGradient(VIEW_W / 2, VIEW_H / 2, VIEW_H * 0.2, VIEW_W / 2, VIEW_H / 2, VIEW_W * 0.65);
+    vignette.addColorStop(0, 'rgba(0,0,0,0)');
+    vignette.addColorStop(1, 'rgba(0,0,0,.38)');
+    ctx.fillStyle = vignette;
+    ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+    ctx.fillStyle = 'rgba(255,255,255,.035)';
+    for (let y = 0; y < VIEW_H; y += 4) ctx.fillRect(0, y, VIEW_W, 1);
   }
 
   function render() {
@@ -1515,6 +1847,7 @@
     }
     drawBackground();
     drawWorld();
+    drawPostFX();
     drawHUD();
     if (state === 'paused') {
       ctx.fillStyle = 'rgba(0,0,0,.55)';
